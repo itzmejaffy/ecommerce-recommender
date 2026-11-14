@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kartwise – shop with suggestions</title>
+<style>
+  :root { --bg:#eef1f4; --surface:#fff; --ink:#14202b; --muted:#5b6b7a; --line:#d5dce3; --accent:#0e7490; --tag:#9a5b00; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:16px/1.5 "Segoe UI", system-ui, -apple-system, sans-serif; }
+  header { background:var(--ink); color:#fff; padding:14px 24px; display:flex; gap:16px; align-items:center; flex-wrap:wrap; }
+  header h1 { margin:0; font-size:1.25rem; letter-spacing:.01em; flex:1; }
+  header label { font-size:.9rem; color:#b9c6d2; }
+  select, input, button { font:inherit; }
+  select { padding:6px 10px; border-radius:4px; border:1px solid #3a4b5b; background:#1f2f3d; color:#fff; }
+  main { max-width:1100px; margin:0 auto; padding:24px; display:grid; grid-template-columns:minmax(0,1.6fr) minmax(0,1fr); gap:28px; }
+  @media (max-width:800px) { main { grid-template-columns:1fr; padding:16px; } }
+  form { display:flex; gap:8px; margin-bottom:20px; grid-column:1 / -1; }
+  input[type=search] { flex:1; padding:11px 14px; border:1px solid var(--line); border-radius:6px; background:var(--surface); }
+  button { cursor:pointer; border:0; border-radius:6px; padding:9px 16px; background:var(--accent); color:#fff; }
+  button:disabled { background:#9fb0bd; cursor:default; }
+  button:focus-visible, input:focus-visible, select:focus-visible { outline:3px solid #f5b942; outline-offset:2px; }
+  h2 { font-size:1.05rem; margin:0 0 4px; }
+  .sub { color:var(--muted); font-size:.88rem; margin:0 0 12px; }
+  ul { list-style:none; margin:0; padding:0; background:var(--surface); border:1px solid var(--line); border-radius:6px; }
+  li { display:grid; grid-template-columns:44px 1fr auto; gap:12px; align-items:center; padding:12px 14px; border-top:1px solid var(--line); }
+  li:first-child { border-top:0; }
+  .thumb { width:44px; height:44px; border-radius:6px; display:grid; place-items:center; color:#fff; font-weight:600; }
+  .name { font-weight:600; }
+  .meta { color:var(--muted); font-size:.85rem; }
+  .why { color:var(--tag); font-size:.85rem; }
+  .side { display:flex; flex-direction:column; align-items:flex-end; gap:6px; }
+  .price { font-weight:600; }
+  .empty { padding:16px; color:var(--muted); }
+  section + section { margin-top:28px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Kartwise</h1>
+  <label for="user">Shopping as</label>
+  <select id="user"></select>
+</header>
+<main>
+  <form id="search">
+    <input type="search" id="q" placeholder="Search products, e.g. laptop, earbuds, protein" aria-label="Search products">
+    <button type="submit">Search</button>
+  </form>
+
+  <div>
+    <section>
+      <h2 id="results-title">Trending now</h2>
+      <p class="sub" id="results-sub">Search to find products. Results favour what you tend to buy.</p>
+      <ul id="results"></ul>
+    </section>
+  </div>
+
+  <div>
+    <section>
+      <h2>Suggested for you</h2>
+      <p class="sub">Based on your purchase history.</p>
+      <ul id="suggestions"></ul>
+    </section>
+    <section>
+      <h2>Your purchases</h2>
+      <p class="sub">Newest first. Buying something updates your suggestions.</p>
+      <ul id="history"></ul>
+    </section>
+  </div>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const HUES = { Smartphones:200, Laptops:250, Audio:330, Fitness:150, Kitchen:25, Books:45 };
+let userId = null;
+
+function el(tag, cls, text) {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text !== undefined) n.textContent = text;   // textContent: no HTML injection
+  return n;
+}
+
+function row(p, { buy = true } = {}) {
+  const li = el("li");
+  const thumb = el("div", "thumb", p.category[0]);
+  thumb.style.background = `hsl(${HUES[p.category] || 210} 55% 38%)`;
+  const info = el("div");
+  info.append(el("div", "name", p.name), el("div", "meta", `${p.category}, ${p.brand}`));
+  if (p.reason) info.append(el("div", "why", p.reason));
+  const side = el("div", "side");
+  side.append(el("div", "price", "₹" + p.price.toLocaleString("en-IN")));
+  if (buy) {
+    const b = el("button", "", p.bought ? "Purchased" : "Buy");
+    b.disabled = p.bought;
+    b.onclick = async () => {
+      await fetch("/api/purchase", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ user_id: userId, product_id: p.id }) });
+      load();
+    };
+    side.append(b);
+  }
+  li.append(thumb, info, side);
+  return li;
+}
+
+function fill(ul, items, emptyMsg, opts) {
+  ul.replaceChildren();
+  if (!items.length) { const li = el("li", "empty", emptyMsg); li.style.display = "block"; ul.append(li); return; }
+  items.forEach(p => ul.append(row(p, opts)));
+}
+
+async function load() {
+  const q = $("q").value.trim();
+  const [s, h] = await Promise.all([
+    fetch(`/api/search?user_id=${userId}&q=${encodeURIComponent(q)}`).then(r => r.json()),
+    fetch(`/api/history?user_id=${userId}`).then(r => r.json()),
+  ]);
+  $("results-title").textContent = q ? `Results for “${q}”` : "Trending now";
+  fill($("results"), s.results, "No products match that search. Try a broader word like “phone” or “kitchen”.");
+  fill($("suggestions"), s.suggestions, "No suggestions yet.");
+  fill($("history"), h, "Nothing purchased yet. Buy an item to get personal suggestions.", { buy: false });
+}
+
+$("search").addEventListener("submit", e => { e.preventDefault(); load(); });
+$("user").addEventListener("change", e => { userId = +e.target.value; load(); });
+
+fetch("/api/users").then(r => r.json()).then(users => {
+  users.forEach(u => { const o = el("option", "", u.name); o.value = u.id; $("user").append(o); });
+  userId = users[0].id;
+  load();
+});
+</script>
+</body>
+</html>
